@@ -1,0 +1,58 @@
+# 기본 규칙. checked 는 형식을 마지막으로 확인한 날짜다.
+# 값의 일부만 가리려면 정규식에 (?P<secret>...) 이름 그룹을 둔다. 없으면 일치한 전체를 가린다.
+
+[[rule]]
+id = "github-token"
+name = "GitHub 토큰"
+regex = '\b(?P<secret>(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36})\b'
+severity = "high"
+fix = "GitHub > Settings > Developer settings > Personal access tokens에서 폐기 후 재발급 (OAuth·앱 토큰은 해당 앱 설정에서 폐기)"
+checked = "2026-11-23"
+
+[[rule]]
+id = "github-fine-grained-pat"
+name = "GitHub 세분화 토큰"
+regex = '\b(?P<secret>github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59})\b'
+severity = "high"
+fix = "GitHub > Settings > Developer settings > Fine-grained tokens에서 폐기 후 재발급"
+checked = "2026-11-23"
+
+[[rule]]
+id = "google-api-key"
+name = "Google API 키"
+regex = '\b(?P<secret>AIza[0-9A-Za-z_-]{35})'
+severity = "high"
+fix = "Google Cloud Console > API 및 서비스 > 사용자 인증 정보에서 키 삭제 후 재발급, 새 키에는 API·앱 제한 설정"
+checked = "2026-11-23"
+
+[[rule]]
+id = "aws-access-key-id"
+name = "AWS 액세스 키 ID"
+regex = '\b(?P<secret>(?:AKIA|ASIA)[A-Z2-7]{16})\b'
+severity = "high"
+fix = "AWS 콘솔 > IAM > 사용자 > 보안 자격 증명에서 액세스 키 비활성화·삭제 후 재발급, CloudTrail에서 사용 기록 확인"
+checked = "2026-11-23"
+
+[[rule]]
+id = "discord-bot-token"
+name = "디스코드 봇 토큰"
+regex = '(?:^|[^A-Za-z0-9_-])(?P<secret>[MNO][A-Za-z0-9_-]{22,26}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,40})'
+severity = "high"
+fix = "Discord Developer Portal > Applications > 해당 앱 > Bot에서 Reset Token으로 재발급"
+checked = "2026-11-23"
+
+[[rule]]
+id = "discord-webhook"
+name = "디스코드 웹훅 주소"
+regex = 'https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api(?:/v\d+)?/webhooks/(?P<secret>\d{17,20}/[A-Za-z0-9_-]{60,80})'
+severity = "medium"
+fix = "디스코드 채널 설정 > 연동 > 웹후크에서 해당 웹후크 삭제 후 새로 생성"
+checked = "2026-11-23"
+
+[[rule]]
+id = "private-key"
+name = "개인키"
+regex = '-----BEGIN (?P<secret>(?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----'
+severity = "high"
+fix = "키 쌍을 새로 만들고, 이 키의 공개키를 등록한 곳(서버 authorized_keys, 배포 키, 인증서 등)에서 제거"
+checked = "2026-11-23"
