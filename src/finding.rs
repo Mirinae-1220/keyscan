@@ -2,6 +2,7 @@ pub struct Finding {
     pub rule: usize,
     pub path: String,
     pub line: usize,
+    pub commit: Option<String>,
     pub masked: String,
 }
 

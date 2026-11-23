@@ -1,6 +1,11 @@
 # 기본 규칙. checked 는 형식을 마지막으로 확인한 날짜다.
 # 값의 일부만 가리려면 정규식에 (?P<secret>...) 이름 그룹을 둔다. 없으면 일치한 전체를 가린다.
 
+[entropy]
+name = "무작위 문자열(비밀값 의심)"
+severity = "medium"
+fix = "어떤 서비스의 키인지 확인해 그 서비스에서 폐기 후 재발급, 비밀값이 아니면 줄 끝에 keyscan:allow"
+
 [[rule]]
 id = "github-token"
 name = "GitHub 토큰"
@@ -55,4 +60,92 @@ name = "개인키"
 regex = '-----BEGIN (?P<secret>(?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----'
 severity = "high"
 fix = "키 쌍을 새로 만들고, 이 키의 공개키를 등록한 곳(서버 authorized_keys, 배포 키, 인증서 등)에서 제거"
+checked = "2026-11-23"
+
+[[rule]]
+id = "kakao-app-key"
+name = "카카오 앱 키"
+regex = '\b(?P<secret>[0-9a-f]{32})\b'
+keywords = ["kakao"]
+severity = "medium"
+fix = "카카오디벨로퍼스 > 앱 > 플랫폼 키(어드민 키는 어드민 키) > 키 관리 메뉴에서 복제 키 생성 후 원본 키 삭제"
+checked = "2026-11-23"
+
+[[rule]]
+id = "naver-client-secret"
+name = "네이버 Client Secret"
+regex = '''(?i)secret["']?\s*(?::=|=|:)\s*["']?(?P<secret>[A-Za-z0-9_-]{8,20})\b'''
+keywords = ["naver"]
+severity = "medium"
+fix = "네이버 개발자센터 > Application > 내 애플리케이션 > 해당 앱에서 Client Secret 재발급"
+checked = "2026-11-23"
+
+[[rule]]
+id = "toss-live-secret-key"
+name = "토스페이먼츠 라이브 시크릿 키"
+regex = '\b(?P<secret>live_g?sk_[A-Za-z0-9_]{20,})'
+severity = "high"
+fix = "토스페이먼츠 개발자센터 > API 키에서 키 재발급, 결제 내역에서 의심 거래 확인"
+checked = "2026-11-23"
+
+[[rule]]
+id = "toss-test-secret-key"
+name = "토스페이먼츠 테스트 시크릿 키"
+regex = '\b(?P<secret>test_g?sk_[A-Za-z0-9_]{20,})'
+severity = "low"
+fix = "테스트 키라 실제 결제는 없지만 토스페이먼츠 개발자센터 > API 키에서 재발급 권장"
+checked = "2026-11-23"
+
+# 개인정보는 앞 2자만 남긴다(keep = 2).
+
+[[rule]]
+id = "kr-rrn"
+name = "주민등록번호·외국인등록번호"
+regex = '(?:^|[^0-9.-])(?P<secret>[0-9]{6}-[0-9]{7})(?:[^0-9.-]|$)'
+validate = "kr-rrn"
+keep = 2
+severity = "high"
+fix = "실제 번호면 파일에서 지우고 커밋 기록에서도 제거, 테스트 데이터는 가짜 번호로 교체"
+checked = "2026-11-23"
+
+[[rule]]
+id = "kr-card"
+name = "카드번호"
+regex = '(?:^|[^0-9.-])(?P<secret>[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4})(?:[^0-9.-]|$)'
+validate = "luhn"
+keep = 2
+severity = "high"
+fix = "실제 번호면 파일에서 지우고 커밋 기록에서도 제거, 테스트에는 카드사 공개 테스트 번호 사용"
+checked = "2026-11-23"
+
+# 구분자 없는 16자리 숫자는 ID·타임스탬프와 구별되지 않아(약 10%가 우연히 Luhn 통과) 카드 관련 단어가 있을 때만 본다.
+[[rule]]
+id = "kr-card-plain"
+name = "카드번호(구분자 없음)"
+regex = '(?:^|[^0-9.-])(?P<secret>[0-9]{16})(?:[^0-9.-]|$)'
+keywords = ["card", "카드", "credit", "결제"]
+validate = "luhn"
+keep = 2
+severity = "high"
+fix = "실제 번호면 파일에서 지우고 커밋 기록에서도 제거, 테스트에는 카드사 공개 테스트 번호 사용"
+checked = "2026-11-23"
+
+[[rule]]
+id = "kr-brn"
+name = "사업자등록번호"
+regex = '(?:^|[^0-9.-])(?P<secret>[0-9]{3}-[0-9]{2}-[0-9]{5})(?:[^0-9.-]|$)'
+validate = "kr-brn"
+keep = 2
+severity = "low"
+fix = "공개된 사업자 번호가 아니면 파일에서 지우고 커밋 기록에서도 제거"
+checked = "2026-11-23"
+
+[[rule]]
+id = "kr-phone"
+name = "휴대폰 번호"
+regex = '(?:^|[^0-9.-])(?P<secret>01[016789]-?[0-9]{3,4}-?[0-9]{4})(?:[^0-9.-]|$)'
+keep = 2
+enabled = false
+severity = "low"
+fix = "실제 번호면 파일에서 지우고 커밋 기록에서도 제거, 테스트 데이터는 가짜 번호로 교체"
 checked = "2026-11-23"

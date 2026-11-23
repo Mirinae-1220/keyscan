@@ -2,19 +2,31 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 
 use anyhow::{Context, Result, bail};
 
 use crate::skip::Skip;
 
 const BINARY_SNIFF: usize = 8000;
+const COMMIT_MARK: &str = "\0keyscan-commit ";
 
+#[derive(Default)]
 pub struct Stats {
     pub files: usize,
+    pub commits: usize,
     pub errors: usize,
 }
 
-pub type Sink<'a> = dyn FnMut(&str, usize, &str) + 'a;
+pub struct Line<'a> {
+    pub path: &'a str,
+    pub line: usize,
+    pub commit: Option<&'a str>,
+    pub text: &'a str,
+}
+
+pub type Sink<'a> = dyn Fn(Line) + Sync + 'a;
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")
@@ -50,27 +62,65 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0)
 }
 
-fn scan_file(full: &Path, rel: &str, stats: &mut Stats, sink: &mut Sink) {
+fn scan_file(full: &Path, rel: &str, sink: &Sink) -> Result<bool, std::io::Error> {
     let bytes = match fs::read(full) {
         Ok(b) => b,
-        Err(e) if e.kind() == ErrorKind::NotFound => return,
-        Err(e) => {
-            eprintln!("경고: 파일을 읽지 못했습니다: {rel} ({e})");
-            stats.errors += 1;
-            return;
-        }
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
     };
-    stats.files += 1;
     if is_binary(&bytes) {
-        return;
+        return Ok(true);
     }
     let text = String::from_utf8_lossy(&bytes);
     for (i, line) in text.lines().enumerate() {
-        sink(rel, i + 1, line);
+        sink(Line {
+            path: rel,
+            line: i + 1,
+            commit: None,
+            text: line,
+        });
+    }
+    Ok(true)
+}
+
+fn scan_files(files: &[(PathBuf, String)], sink: &Sink) -> Stats {
+    let next = AtomicUsize::new(0);
+    let scanned = AtomicUsize::new(0);
+    let errors = AtomicUsize::new(0);
+    let workers = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(files.len().max(1));
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((full, rel)) = files.get(i) else {
+                        break;
+                    };
+                    match scan_file(full, rel, sink) {
+                        Ok(true) => {
+                            scanned.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            eprintln!("경고: 파일을 읽지 못했습니다: {rel} ({e})");
+                            errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        }
+    });
+    Stats {
+        files: scanned.into_inner(),
+        commits: 0,
+        errors: errors.into_inner(),
     }
 }
 
-pub fn scan_git(dir: &Path, top: &Path, skip: &Skip, sink: &mut Sink) -> Result<Stats> {
+pub fn scan_git(dir: &Path, top: &Path, skip: &Skip, sink: &Sink) -> Result<Stats> {
     let prefix = git_ok(dir, &["rev-parse", "--show-prefix"])?
         .trim()
         .to_string();
@@ -92,38 +142,28 @@ pub fn scan_git(dir: &Path, top: &Path, skip: &Skip, sink: &mut Sink) -> Result<
     paths.sort();
     paths.dedup();
 
-    let mut stats = Stats {
-        files: 0,
-        errors: 0,
-    };
-    for rel in paths {
-        if skip.skips(&rel) {
-            continue;
-        }
-        let full = top.join(&rel);
-        if full.is_dir() {
-            continue;
-        }
-        scan_file(&full, &rel, &mut stats, sink);
-    }
-    Ok(stats)
+    let files: Vec<(PathBuf, String)> = paths
+        .into_iter()
+        .filter(|rel| !skip.skips(rel))
+        .map(|rel| (top.join(&rel), rel))
+        .filter(|(full, _)| !full.is_dir())
+        .collect();
+    Ok(scan_files(&files, sink))
 }
 
-pub fn scan_dir(root: &Path, skip: &Skip, sink: &mut Sink) -> Result<Stats> {
+pub fn scan_dir(root: &Path, skip: &Skip, sink: &Sink) -> Result<Stats> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .filter_entry(|e| e.file_name() != ".git")
         .build();
-    let mut stats = Stats {
-        files: 0,
-        errors: 0,
-    };
+    let mut files = Vec::new();
+    let mut walk_errors = 0;
     for entry in walker {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("경고: 폴더를 읽지 못했습니다: {e}");
-                stats.errors += 1;
+                walk_errors += 1;
                 continue;
             }
         };
@@ -139,54 +179,60 @@ pub fn scan_dir(root: &Path, skip: &Skip, sink: &mut Sink) -> Result<Stats> {
         if skip.skips(&rel) {
             continue;
         }
-        scan_file(entry.path(), &rel, &mut stats, sink);
+        files.push((entry.path().to_path_buf(), rel));
     }
+    let mut stats = scan_files(&files, sink);
+    stats.errors += walk_errors;
     Ok(stats)
 }
 
-pub fn scan_staged(top: &Path, skip: &Skip, sink: &mut Sink) -> Result<Stats> {
-    let diff = git_ok(
-        top,
-        &[
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "--cached",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "-U0",
-            "--diff-filter=d",
-        ],
-    )?;
+const DIFF_ARGS: &[&str] = &["--no-color", "--no-ext-diff", "--no-textconv", "-U0"];
+
+pub fn scan_staged(top: &Path, skip: &Skip, sink: &Sink) -> Result<Stats> {
+    let mut args = vec!["-c", "core.quotepath=false", "diff", "--cached"];
+    args.extend_from_slice(DIFF_ARGS);
+    args.push("--diff-filter=d");
+    let diff = git_ok(top, &args)?;
     Ok(parse_diff(&diff, skip, sink))
 }
 
-fn parse_diff(diff: &str, skip: &Skip, sink: &mut Sink) -> Stats {
-    let mut stats = Stats {
-        files: 0,
-        errors: 0,
-    };
+pub fn scan_history(top: &Path, skip: &Skip, sink: &Sink) -> Result<Stats> {
+    let format = format!("--format={}%H", COMMIT_MARK.replace('\0', "%x00"));
+    let mut args = vec!["-c", "core.quotepath=false", "log", "-p", "--all"];
+    args.extend_from_slice(DIFF_ARGS);
+    args.push(&format);
+    let log = git_ok(top, &args)?;
+    Ok(parse_diff(&log, skip, sink))
+}
+
+fn parse_diff(diff: &str, skip: &Skip, sink: &Sink) -> Stats {
+    let mut stats = Stats::default();
+    let mut commit: Option<&str> = None;
     let mut path: Option<String> = None;
     let mut in_hunk = false;
     let mut line_no = 0usize;
     for line in diff.lines() {
+        if let Some(hash) = line.strip_prefix(COMMIT_MARK) {
+            commit = Some(hash.trim());
+            stats.commits += 1;
+            path = None;
+            in_hunk = false;
+            continue;
+        }
         if line.starts_with("diff --git ") {
             path = None;
             in_hunk = false;
             continue;
         }
-        if !in_hunk {
-            if let Some(p) = line.strip_prefix("+++ ") {
-                path = p
-                    .strip_prefix("b/")
-                    .map(|p| p.trim_end_matches('\t').to_string())
-                    .filter(|p| !skip.skips(p));
-                if path.is_some() {
-                    stats.files += 1;
-                }
-                continue;
+        if !in_hunk && let Some(p) = line.strip_prefix("+++ ") {
+            path = p
+                .strip_prefix("b/")
+                .map(|p| p.trim_end_matches('\t').to_string())
+                .filter(|p| !skip.skips(p));
+            if path.is_some() {
+                stats.files += 1;
             }
+            continue;
         }
         if let Some(rest) = line.strip_prefix("@@ ") {
             in_hunk = true;
@@ -198,7 +244,12 @@ fn parse_diff(diff: &str, skip: &Skip, sink: &mut Sink) -> Stats {
         }
         if let Some(added) = line.strip_prefix('+') {
             if let Some(p) = &path {
-                sink(p, line_no, added);
+                sink(Line {
+                    path: p,
+                    line: line_no,
+                    commit,
+                    text: added,
+                });
             }
             line_no += 1;
         }
@@ -215,6 +266,24 @@ fn hunk_start(rest: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    fn collect(diff: &str) -> (Vec<String>, Stats) {
+        let got = std::sync::Mutex::new(Vec::new());
+        let stats = parse_diff(
+            diff,
+            &Skip::load(Path::new("/nonexistent")).unwrap(),
+            &|l: Line| {
+                got.lock().unwrap().push(format!(
+                    "{}:{}:{}:{}",
+                    l.commit.unwrap_or("-"),
+                    l.path,
+                    l.line,
+                    l.text
+                ))
+            },
+        );
+        (got.into_inner().unwrap(), stats)
+    }
+
     #[test]
     fn parses_added_lines_with_numbers() {
         let diff = "diff --git a/a.txt b/a.txt\n\
@@ -229,14 +298,23 @@ mod tests {
                     +new\n\
                     diff --git a/b.bin b/b.bin\n\
                     Binary files a/b.bin and b/b.bin differ\n";
-        let mut got = Vec::new();
-        let stats = parse_diff(
-            diff,
-            &Skip::load(Path::new("/nonexistent")).unwrap(),
-            &mut |p, n, l| got.push(format!("{p}:{n}:{l}")),
+        let (got, stats) = collect(diff);
+        assert_eq!(
+            got,
+            vec!["-:a.txt:4:one", "-:a.txt:5:two", "-:a.txt:12:new"]
         );
-        assert_eq!(got, vec!["a.txt:4:one", "a.txt:5:two", "a.txt:12:new"]);
         assert_eq!(stats.files, 1);
+    }
+
+    #[test]
+    fn tracks_commits_in_log() {
+        let log = format!(
+            "{COMMIT_MARK}aaa\n\ndiff --git a/x b/x\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+first\n\
+             {COMMIT_MARK}bbb\n\ndiff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,0 +2 @@\n+second\n"
+        );
+        let (got, stats) = collect(&log);
+        assert_eq!(got, vec!["aaa:x:1:first", "bbb:x:2:second"]);
+        assert_eq!(stats.commits, 2);
     }
 
     #[test]

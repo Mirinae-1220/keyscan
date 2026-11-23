@@ -217,20 +217,20 @@ fn user_rule_with_keywords() {
         ".keyscan.toml",
         r#"
 [[rule]]
-id = "kakao-rest"
-name = "카카오 REST API 키"
+id = "corp-key"
+name = "사내 API 키"
 regex = '\b[0-9a-f]{32}\b'
-keywords = ["kakao"]
+keywords = ["corp"]
 severity = "high"
-fix = "카카오 디벨로퍼스에서 재발급"
+fix = "사내 키 관리 화면에서 재발급"
 "#,
     );
     let hex = "0123456789abcdef".repeat(2);
-    repo.write("a.txt", &format!("KAKAO_KEY={hex}\ncommit {hex}\n"));
+    repo.write("a.txt", &format!("CORP_ID={hex}\ncommit {hex}\n"));
     let (code, out, _) = repo.keyscan(&["scan"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("1건 발견"), "{out}");
-    assert!(out.contains("해결: 카카오 디벨로퍼스에서 재발급"), "{out}");
+    assert!(out.contains("해결: 사내 키 관리 화면에서 재발급"), "{out}");
 }
 
 #[test]
@@ -311,4 +311,133 @@ fn install_hook_blocks_commit_and_refuses_overwrite() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn history_finds_removed_secret_with_commit() {
+    let repo = Repo::new();
+    repo.write(
+        "a.txt",
+        &format!(
+            "T={}
+",
+            bot_token()
+        ),
+    );
+    repo.commit_all();
+    let first = String::from_utf8_lossy(&repo.git(&["rev-parse", "--short=7", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    repo.write(
+        "a.txt", "clean
+",
+    );
+    repo.commit_all();
+
+    let (code, out, _) = repo.keyscan(&["scan"]);
+    assert_eq!(code, 0, "{out}");
+
+    let (code, out, err) = repo.keyscan(&["history"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains(&format!("a.txt:1 ({first})")), "{out}");
+    assert!(out.contains("(커밋 2개 검사)"), "{out}");
+    assert!(out.contains("이미 유출된 것으로 보고 재발급"), "{out}");
+    assert_no_secret(&out);
+}
+
+#[test]
+fn json_and_sarif_output() {
+    let repo = Repo::new();
+    repo.write(
+        "a.txt",
+        &format!(
+            "x
+T={}
+",
+            bot_token()
+        ),
+    );
+
+    let (code, out, _) = repo.keyscan(&["scan", "--format", "json"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["count"], 1);
+    assert_eq!(v["scanned"]["files"], 1);
+    let f = &v["findings"][0];
+    assert_eq!(f["rule"], "discord-bot-token");
+    assert_eq!(f["path"], "a.txt");
+    assert_eq!(f["line"], 2);
+    assert_eq!(f["value"], "MTAA****");
+    assert!(f["commit"].is_null());
+    assert_no_secret(&out);
+
+    let (code, out, _) = repo.keyscan(&["scan", "--format", "sarif"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["version"], "2.1.0");
+    let r = &v["runs"][0]["results"][0];
+    assert_eq!(r["ruleId"], "discord-bot-token");
+    assert_eq!(r["level"], "error");
+    assert_eq!(
+        r["locations"][0]["physicalLocation"]["region"]["startLine"],
+        2
+    );
+    assert_no_secret(&out);
+
+    let clean = Repo::new();
+    let (code, out, _) = clean.keyscan(&["scan", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["count"], 0);
+}
+
+#[test]
+fn entropy_and_no_entropy_flag() {
+    let repo = Repo::new();
+    let value = "q8Zr2Lm9Xv4Tn7Kp1Wc6Hy3Bd5Fs0Gj";
+    repo.write(
+        "config.py",
+        &format!(
+            "API_SECRET = \"{value}\"
+"
+        ),
+    );
+    let (code, out, _) = repo.keyscan(&["scan"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("high-entropy"), "{out}");
+    assert!(!out.contains(value), "{out}");
+    let (code, out, _) = repo.keyscan(&["scan", "--no-entropy"]);
+    assert_eq!(code, 0, "{out}");
+}
+
+#[test]
+fn korean_personal_info_and_phone_opt_in() {
+    let repo = Repo::new();
+    repo.write(
+        "users.csv",
+        concat!(
+            "name,rrn,phone
+kim,900101",
+            "-1234567,010-1234",
+            "-5678
+"
+        ),
+    );
+    let (code, out, _) = repo.keyscan(&["scan"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("kr-rrn"), "{out}");
+    assert!(out.contains("90****"), "{out}");
+    assert!(!out.contains("kr-phone"), "{out}");
+    assert!(!out.contains("1234567"), "{out}");
+
+    repo.write(
+        ".keyscan.toml",
+        "enable = [\"kr-phone\"]
+",
+    );
+    let (code, out, _) = repo.keyscan(&["scan"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("kr-phone"), "{out}");
+    assert!(out.contains("01****"), "{out}");
+    assert!(!out.contains("5678"), "{out}");
 }

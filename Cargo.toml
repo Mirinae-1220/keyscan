@@ -2,7 +2,7 @@
 name = "keyscan"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "git 레포에서 비밀값을 찾아 커밋 전에 막고 재발급 방법을 알려 주는 CLI"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Mirinae-1220/keyscan"
@@ -16,7 +16,9 @@ clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.9"
 
 [dev-dependencies]
+serde_json = "1"
 tempfile = "3"
