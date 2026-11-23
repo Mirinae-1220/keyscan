@@ -50,7 +50,7 @@ fn kr_brn(d: &[u32]) -> bool {
 }
 
 // 2020년 10월부터 뒷자리 지역번호·검증번호가 임의 숫자로 바뀌어 옛 검증 공식이 새 번호를 떨어뜨린다.
-// 그래서 생년월일이 실제 날짜인지와 성별 자리만 본다.
+// 그래서 생년월일이 실제 날짜인지와 성별 자리(1~4 내국인, 5~8 외국인)만 본다.
 fn kr_rrn(d: &[u32]) -> bool {
     if d.len() != 13 {
         return false;
@@ -61,7 +61,6 @@ fn kr_rrn(d: &[u32]) -> bool {
     let year = match d[6] {
         1 | 2 | 5 | 6 => 1900 + yy,
         3 | 4 | 7 | 8 => 2000 + yy,
-        9 | 0 => 1800 + yy,
         _ => return false,
     };
     (1..=12).contains(&mm) && dd >= 1 && dd <= days_in_month(year, mm)
@@ -105,5 +104,7 @@ mod tests {
         assert!(!Validator::KrRrn.check("030229-3234567"));
         assert!(!Validator::KrRrn.check("901301-1234567"));
         assert!(!Validator::KrRrn.check("900132-2234567"));
+        assert!(!Validator::KrRrn.check(concat!("900101", "-9234567")));
+        assert!(!Validator::KrRrn.check(concat!("900101", "-0234567")));
     }
 }
