@@ -3,13 +3,13 @@
 git 레포의 파일과 커밋 기록에서 비밀값(API 키, 봇 토큰, 개인키)과 한국 개인정보를 찾는 Rust CLI다.
 커밋 전에 막고, 찾은 키를 어디서 폐기하고 재발급하는지 함께 출력한다.
 
-## 지금 상태 (2026-11-23, 4d4e8cb)
+## 지금 상태 (2026-11-24, 9c047fd)
 
 - 명령 4개: `scan`, `staged`, `history`, `install-hook`
 - 기본 규칙 16개(정규식)와 엔트로피 검사 1개. 그중 `kr-phone`은 기본으로 꺼져 있다
 - 출력 형식 3개: `text`, `json`, `sarif`
 - 테스트 42개(단위 27, 통합 15). Ubuntu와 Windows CI에서 fmt, clippy, test, 자기 검사를 돌린다
-- 아직 릴리스와 crates.io 등록은 없다. 소스에서 설치한다
+- v0.1.0을 GitHub 릴리스(실행 파일 4종)와 crates.io에 올렸다
 
 ## 한계와 주의점
 
@@ -67,14 +67,23 @@ tests/cli.rs      임시 git 레포를 만드는 통합 테스트
 
 필요한 것
 
-- Rust 1.88 이상(stable)
 - git
-- Windows 11과 Ubuntu에서 테스트했다. macOS에서는 돌려 보지 않았다
+- crates.io로 설치할 때만 Rust 1.88 이상(stable)
+- Windows 11과 Ubuntu에서 테스트했다. macOS 실행 파일은 빌드만 했고 돌려 보지 않았다
 
 ### 0. 설치
 
+실행 파일: [릴리스](https://github.com/Mirinae-1220/keyscan/releases/latest)에서 OS에 맞는 파일을 받아 압축을 풀고 PATH에 둔다.
+
+- Windows x64: `x86_64-pc-windows-msvc.zip`
+- Linux x64: `x86_64-unknown-linux-musl.tar.gz`
+- macOS Apple Silicon: `aarch64-apple-darwin.tar.gz`
+- macOS Intel: `x86_64-apple-darwin.tar.gz`
+
+crates.io:
+
 ```sh
-cargo install --git https://github.com/Mirinae-1220/keyscan
+cargo install keyscan
 ```
 
 ### 1. 커밋 전에 막기
@@ -153,7 +162,7 @@ fix = "사내 키 관리 화면에서 재발급"
 ```yaml
 - uses: actions/checkout@v4
 - uses: dtolnay/rust-toolchain@stable
-- run: cargo install --git https://github.com/Mirinae-1220/keyscan
+- run: cargo install keyscan
 - run: keyscan scan
 ```
 
